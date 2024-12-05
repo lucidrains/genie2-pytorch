@@ -93,11 +93,15 @@ class Genie2(Module):
         self,
         state
     ):
-        need_fold_time_into_batch = self.is_video_enc_dec
+        # only need to fold time into batch if not a video enc/dec (classic image enc/dec of today)
+
+        need_fold_time_into_batch = not self.is_video_enc_dec
 
         if need_fold_time_into_batch:
             state = rearrange(state, 'b c t ... -> b t c ...')
             state, unpack_time = pack_one(state, '* c h w') # state packed into images
+
+        # encode into latents
 
         latents = self.encoder(state)
 
@@ -105,19 +109,34 @@ class Genie2(Module):
             latents = unpack_time(latents, '* c h w')
             latents = rearrange(latents, 'b t c h w -> b c t h w')
 
+        # handle channel first, if encoder does not
+
         if self.latent_channel_first:
             latents = rearrange(latents, 'b d ... -> b ... d')
+
+        # pack time and spatial fmap into a sequence for transformer
 
         latents, unpack_time_space_dims = pack_one(latents, 'b * d')
 
         assert latents.shape[-1] == self.dim_latent
 
+        # project in
+
         x = self.latent_to_model(latents)
+
+        # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
 
         quantized, indices, commit_loss = self.vq(x)
 
+        # autoregressive attention
+
         x = self.transformer(quantized)
+
+        # project out
+
         x = self.model_to_latent(x)
+
+        # restore time and space
 
         x = unpack_time_space_dims(x)
 
@@ -127,6 +146,8 @@ class Genie2(Module):
         if need_fold_time_into_batch:
             x = rearrange(x, 'b c t h w -> b t c h w')
             x, unpack_time = pack_one(x, '* c h w')
+
+        # decode back to video
 
         decoded = self.decoder(x)
 
