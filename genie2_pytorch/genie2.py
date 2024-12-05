@@ -55,6 +55,8 @@ class Genie2(Module):
         heads = 8,
         latent_channel_first = False,
         transformer_kwargs: dict = dict(),
+        vq_codebook_size = 4096,
+        vq_kwargs: dict = dict(),
         encoder: Module = nn.Identity(),
         decoder: Module = nn.Identity(),
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
@@ -71,6 +73,13 @@ class Genie2(Module):
 
         self.latent_to_model = nn.Linear(dim_latent, dim)
         self.model_to_latent = nn.Linear(dim, dim_latent)
+
+        self.vq = VectorQuantize(
+            dim = dim,
+            codebook_size = vq_codebook_size,
+            rotation_trick = True,
+            **vq_kwargs
+        )
 
         self.transformer = Decoder(
             dim = dim,
@@ -104,7 +113,10 @@ class Genie2(Module):
         assert latents.shape[-1] == self.dim_latent
 
         x = self.latent_to_model(latents)
-        x = self.transformer(x)
+
+        quantized, indices, commit_loss = self.vq(x)
+
+        x = self.transformer(quantized)
         x = self.model_to_latent(x)
 
         x = unpack_time_space_dims(x)
