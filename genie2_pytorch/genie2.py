@@ -42,9 +42,14 @@ class Genie2(Module):
         depth = 12,
         attn_dim_head = 64,
         heads = 8,
-        transformer_kwargs: dict = dict()
+        transformer_kwargs: dict = dict(),
+        encoder: Module = nn.Identity(),
+        decoder: Module = nn.Identity()
     ):
         super().__init__()
+
+        self.encoder = encoder
+        self.decoder = decoder
 
         self.transformer = Decoder(
             dim = dim,
@@ -56,7 +61,12 @@ class Genie2(Module):
 
     def forward(
         self,
-        x
+        state
     ):
-        attended = self.transformer(x)
-        return attended
+        encoded = self.encoder(state)
+
+        attended = self.transformer(encoded)
+
+        decoded = self.decoder(attended)
+
+        return decoded
