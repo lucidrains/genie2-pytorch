@@ -1,4 +1,1 @@
-from genie2_pytorch.genie2 import (
-    RNNify,
-    Genie2
-)
+from genie2_pytorch.genie2 import Genie2

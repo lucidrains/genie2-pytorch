@@ -9,8 +9,15 @@ from torch.nn import Module, ModuleList
 import einx
 from einops import rearrange
 
+from vector_quantize_pytorch import (
+    VectorQuantize,
+    ResidualVQ
+)
+
+from imagen_pytorch import Imagen
+
 from x_transformers import (
-    Attention
+    Decoder
 )
 
 # helper functions
