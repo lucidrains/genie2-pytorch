@@ -27,8 +27,9 @@ classifiers=[
 dependencies = [
     "einx>=0.3.0",
     "einops>=0.8.0",
-    "pufferlib",
+    "ring-attention-pytorch",
     "torch>=2.0",
+    "vector-quantize-pytorch",
     "x-transformers"
 ]
 
