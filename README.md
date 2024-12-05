@@ -1,4 +1,4 @@
-<img src="./gamengen.png" width="400px"></img>
+<img src="./genie2.png" width="400px"></img>
 
 ## Genie2 - Pytorch (wip)
 
