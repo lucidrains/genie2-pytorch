@@ -1,7 +1,7 @@
 [project]
-name = "gamegen-pytorch"
+name = "genie2-pytorch"
 version = "0.0.1"
-description = "GameNGen"
+description = "Genie2"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
 ]
@@ -11,7 +11,8 @@ license = { file = "LICENSE" }
 keywords = [
     'artificial intelligence',
     'deep learning',
-    'denoising diffusion',
+    'transformers',
+    'attention mechanism',
     'world models'
 ]
 
@@ -32,8 +33,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://pypi.org/project/gamegen-pytorch/"
-Repository = "https://github.com/lucidrains/gamegen-pytorch"
+Homepage = "https://pypi.org/project/genie2-pytorch/"
+Repository = "https://github.com/lucidrains/genie2-pytorch"
 
 [project.optional-dependencies]
 examples = []
@@ -58,4 +59,4 @@ dev-dependencies = []
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["gamegen_pytorch"]
+packages = ["genie2_pytorch"]

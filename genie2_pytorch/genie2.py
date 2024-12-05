@@ -128,7 +128,7 @@ class RNNify(Module):
 
 # main class
 
-class GameNGen(Module):
+class Genie2(Module):
     def __init__(self, dim):
         super().__init__()
 
