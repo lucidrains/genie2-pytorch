@@ -81,17 +81,21 @@ class Genie2(Module):
             **vq_kwargs
         )
 
-        self.transformer = Decoder(
-            dim = dim,
-            depth = depth,
-            heads = heads,
-            attn_dim_head = attn_dim_head,
-            **transformer_kwargs
+        self.transformer = nn.Sequential(
+            Decoder(
+                dim = dim,
+                depth = depth,
+                heads = heads,
+                attn_dim_head = attn_dim_head,
+                **transformer_kwargs
+            ),
+            nn.Linear(dim, dim)
         )
 
     def forward(
         self,
-        state
+        state,
+        return_loss = False
     ):
         # only need to fold time into batch if not a video enc/dec (classic image enc/dec of today)
 
@@ -128,9 +132,20 @@ class Genie2(Module):
 
         quantized, indices, commit_loss = self.vq(x)
 
+        if return_loss:
+            quantized = quantized[:, :-1]
+            labels = indices[:, 1:]
+
         # autoregressive attention
 
         x = self.transformer(quantized)
+
+        # cross entropy loss off the vq codebook
+
+        if return_loss:
+            _, loss = self.vq(x, indices = labels)
+
+            return loss
 
         # project out
 
@@ -169,4 +184,8 @@ if __name__ == '__main__':
 
     x = torch.randn(1, 768, 3, 2, 2)
 
-    out = genie(x)
+    loss = genie(x, return_loss = True)
+    loss.backward()
+
+    recon = genie(x)
+    assert recon.shape == x.shape
