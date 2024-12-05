@@ -50,6 +50,7 @@ class Genie2(Module):
         self,
         dim,
         dim_latent,
+        num_actions: int | None = None,
         depth = 12,
         attn_dim_head = 64,
         heads = 8,
@@ -62,6 +63,8 @@ class Genie2(Module):
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
     ):
         super().__init__()
+
+        self.action_embed = nn.Embedding(num_actions, dim) if exists(num_actions) else None
 
         self.encoder = encoder
         self.decoder = decoder
