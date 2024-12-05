@@ -27,6 +27,7 @@ classifiers=[
 dependencies = [
     "einx>=0.3.0",
     "einops>=0.8.0",
+    "imagen-pytorch>=2.1.0",
     "ring-attention-pytorch",
     "torch>=2.0",
     "vector-quantize-pytorch>=1.20.10",
