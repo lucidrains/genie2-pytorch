@@ -25,6 +25,7 @@ classifiers=[
 ]
 
 dependencies = [
+    "beartype",
     "einx>=0.3.0",
     "einops>=0.8.0",
     "classifier-free-guidance-pytorch>=0.7.1",

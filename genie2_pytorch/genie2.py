@@ -1,4 +1,5 @@
 from __future__ import annotations
+from beartype import beartype
 from functools import partial
 
 import torch
@@ -34,8 +35,28 @@ def identity(t):
 # main class
 
 class Genie2(Module):
-    def __init__(self, dim):
+    @beartype
+    def __init__(
+        self,
+        dim,
+        depth = 12,
+        attn_dim_head = 64,
+        heads = 8,
+        transformer_kwargs: dict = dict()
+    ):
         super().__init__()
 
-    def forward(self, x):
-        return x
+        self.transformer = Decoder(
+            dim = dim,
+            depth = depth,
+            heads = heads,
+            attn_dim_head = dim_head,
+            **transformer_kwargs
+        )
+
+    def forward(
+        self,
+        x
+    ):
+        attended = self.transformer(x)
+        return attended
