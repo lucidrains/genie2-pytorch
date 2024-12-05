@@ -143,7 +143,11 @@ class Genie2(Module):
         # cross entropy loss off the vq codebook
 
         if return_loss:
-            _, loss = self.vq(x, indices = labels)
+            _, loss = self.vq(
+                x,
+                indices = labels,
+                freeze_codebook = True
+            )
 
             return loss
 
