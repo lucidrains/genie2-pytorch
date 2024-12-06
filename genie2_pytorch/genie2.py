@@ -1,4 +1,5 @@
 from __future__ import annotations
+from math import ceil
 from beartype import beartype
 from functools import partial
 
@@ -8,11 +9,15 @@ import torch.nn.functional as F
 from torch.nn import Module, ModuleList
 
 import einx
-from einops import rearrange, reduce, pack, unpack
+from einops import rearrange, reduce, repeat, pack, unpack
 
 from vector_quantize_pytorch import (
     VectorQuantize,
     ResidualVQ
+)
+
+from x_transformers.x_transformers import (
+    RotaryEmbedding
 )
 
 from x_transformers import (
@@ -83,6 +88,10 @@ class Genie2(Module):
         self.latent_to_model = nn.Linear(dim_latent, dim)
         self.model_to_latent = nn.Linear(dim, dim_latent)
 
+        self.time_rotary = RotaryEmbedding(
+            dim = attn_dim_head // 2
+        )
+
         self.vq = VectorQuantize(
             dim = dim_latent,
             codebook_size = vq_codebook_size,
@@ -106,6 +115,10 @@ class Genie2(Module):
         actions = None,
         return_loss = False
     ):
+        device = state.device
+
+        time_seq_len = state.shape[2]
+        time_seq = torch.arange(time_seq_len, device = device)
 
         # handle actions, but allow for state dynamics model to be trained independently
 
@@ -150,12 +163,24 @@ class Genie2(Module):
 
         assert latents.shape[-1] == self.dim_latent
 
+        # handle rotary positions
+
+        latent_seq_len = latents.shape[-2]
+        repeat_factor = ceil(latent_seq_len / time_seq_len)
+        time_seq = repeat(time_seq, 'n -> (n r)', r = repeat_factor)
+
+        time_rotary_pos = self.time_rotary(time_seq)
+
         # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
 
         quantized_latents, indices, commit_loss = self.vq(latents)
 
         if return_loss:
             quantized_latents = quantized_latents[:, :-1]
+
+            rotary_pos, xpos_scale = time_rotary_pos
+            time_rotary_pos = (rotary_pos[:, :-1], xpos_scale)
+
             labels = indices[:, 1:]
 
             if exists(actions):
@@ -172,7 +197,10 @@ class Genie2(Module):
 
         # autoregressive attention
 
-        tokens = self.transformer(tokens)
+        tokens = self.transformer(
+            tokens,
+            rotary_pos_emb = time_rotary_pos
+        )
 
         # project out
 
