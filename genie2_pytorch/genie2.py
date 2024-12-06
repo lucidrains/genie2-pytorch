@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.nn import Module, ModuleList
 
 import einx
-from einops import rearrange, pack, unpack
+from einops import rearrange, reduce, pack, unpack
 
 from vector_quantize_pytorch import (
     VectorQuantize,
@@ -103,8 +103,26 @@ class Genie2(Module):
     def forward(
         self,
         state,
+        actions = None,
         return_loss = False
     ):
+
+        # handle actions, but allow for state dynamics model to be trained independently
+
+        if exists(actions):
+            assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
+
+            assert actions.ndim in {2, 3} # either Int[b, n] or Int[b, n, a] -> for multiple keys being pressed
+            actions, _ = pack_one(actions, 'b n *')
+
+            no_actions = actions < 0
+            actions = actions.masked_fill(no_actions, 0)
+
+            action_embed = self.action_embed(actions)
+            action_embed = einx.where('b n a, b n a d, -> b n a d', ~no_actions, action_embed, 0.)
+
+            action_embed = reduce(action_embed, 'b n a d -> b n d', 'sum')
+
         # only need to fold time into batch if not a video enc/dec (classic image enc/dec of today)
 
         need_fold_time_into_batch = not self.is_video_enc_dec
@@ -140,9 +158,17 @@ class Genie2(Module):
             quantized_latents = quantized_latents[:, :-1]
             labels = indices[:, 1:]
 
+            if exists(actions):
+                action_embed = action_embed[:, :-1]
+
         # project in
 
         tokens = self.latent_to_model(quantized_latents)
+
+        # add action conditioning, if needed
+
+        if exists(actions):
+            tokens = tokens + action_embed
 
         # autoregressive attention
 
@@ -199,14 +225,16 @@ if __name__ == '__main__':
     genie = Genie2(
         dim = 512,
         dim_latent = 768,
+        num_actions = 256,
         latent_channel_first = True,
         is_video_enc_dec = True
     )
 
-    x = torch.randn(1, 768, 3, 2, 2)
+    x = torch.randn(2, 768, 3, 2, 2)
+    actions = torch.randint(0, 256, (2, 12))
 
-    loss, breakdown = genie(x, return_loss = True)
+    loss, breakdown = genie(x, actions = actions, return_loss = True)
     loss.backward()
 
-    recon = genie(x)
+    recon = genie(x, actions = actions)
     assert recon.shape == x.shape
