@@ -183,7 +183,7 @@ class Genie2(Module):
         if return_loss:
             codebook = self.vq.codebook
 
-            logits = torch.cdist(tokens, codebook)
+            logits = -torch.cdist(tokens, codebook)
 
             state_autoregressive_loss = F.cross_entropy(
                 rearrange(logits, 'b n l -> b l n'),
