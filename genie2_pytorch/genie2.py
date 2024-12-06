@@ -40,6 +40,9 @@ def default(v, d):
 def identity(t):
     return t
 
+def l2norm(t, dim = -1):
+    return F.normalize(t, dim = dim, p = 2)
+
 def pack_one(t, pattern):
     packed, ps = pack([t], pattern)
 
@@ -48,6 +51,19 @@ def pack_one(t, pattern):
         return unpack(out, ps, inv_pattern)[0]
 
     return packed, inverse
+
+def project(x, y):
+    x, inverse = pack_one(x, 'b *')
+    y, _ = pack_one(y, 'b *')
+
+    dtype = x.dtype
+    x, y = x.double(), y.double()
+    unit = l2norm(y, dim = -1)
+
+    parallel = (x * unit).sum(dim = -1, keepdim = True) * unit
+    orthogonal = x - parallel
+
+    return inverse(parallel).to(dtype), inverse(orthogonal).to(dtype)
 
 # main class
 
