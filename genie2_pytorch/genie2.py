@@ -60,6 +60,7 @@ class Genie2(Module):
         vq_kwargs: dict = dict(),
         encoder: Module = nn.Identity(),
         decoder: Module = nn.Identity(),
+        vq_commit_loss_weight = 1.,
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
     ):
         super().__init__()
@@ -78,11 +79,13 @@ class Genie2(Module):
         self.model_to_latent = nn.Linear(dim, dim_latent)
 
         self.vq = VectorQuantize(
-            dim = dim,
+            dim = dim_latent,
             codebook_size = vq_codebook_size,
-            rotation_trick = True,
+            rotation_trick = False,
             **vq_kwargs
         )
+
+        self.vq_commit_loss_weight = vq_commit_loss_weight
 
         self.transformer = nn.Sequential(
             Decoder(
@@ -127,51 +130,60 @@ class Genie2(Module):
 
         assert latents.shape[-1] == self.dim_latent
 
-        # project in
-
-        x = self.latent_to_model(latents)
-
         # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
 
-        quantized, indices, commit_loss = self.vq(x)
+        quantized_latents, indices, commit_loss = self.vq(latents)
 
         if return_loss:
-            quantized = quantized[:, :-1]
+            quantized_latents = quantized_latents[:, :-1]
             labels = indices[:, 1:]
+
+        # project in
+
+        tokens = self.latent_to_model(quantized_latents)
 
         # autoregressive attention
 
-        x = self.transformer(quantized)
+        tokens = self.transformer(tokens)
+
+        # project out
+
+        tokens = self.model_to_latent(tokens)
 
         # cross entropy loss off the vq codebook
 
         if return_loss:
-            _, loss = self.vq(
-                x,
-                indices = labels,
-                freeze_codebook = True
+            codebook = self.vq.codebook
+
+            logits = torch.cdist(tokens, codebook)
+
+            state_autoregressive_loss = F.cross_entropy(
+                rearrange(logits, 'b n l -> b l n'),
+                labels,
+                ignore_index = -1
             )
 
-            return loss
+            total_loss = (
+                state_autoregressive_loss +
+                commit_loss * self.vq_commit_loss_weight
+            )
 
-        # project out
-
-        x = self.model_to_latent(x)
+            return total_loss, (state_autoregressive_loss, commit_loss)
 
         # restore time and space
 
-        x = unpack_time_space_dims(x)
+        tokens = unpack_time_space_dims(tokens)
 
         if self.latent_channel_first:
-            x = rearrange(x, 'b ... d -> b d ...')
+            tokens = rearrange(tokens, 'b ... d -> b d ...')
 
         if need_fold_time_into_batch:
-            x = rearrange(x, 'b c t h w -> b t c h w')
-            x, unpack_time = pack_one(x, '* c h w')
+            tokens = rearrange(tokens, 'b c t h w -> b t c h w')
+            tokens, unpack_time = pack_one(tokens, '* c h w')
 
         # decode back to video
 
-        decoded = self.decoder(x)
+        decoded = self.decoder(tokens)
 
         if need_fold_time_into_batch:
             decoded = unpack_time(decoded, '* c h w')
@@ -191,7 +203,7 @@ if __name__ == '__main__':
 
     x = torch.randn(1, 768, 3, 2, 2)
 
-    loss = genie(x, return_loss = True)
+    loss, breakdown = genie(x, return_loss = True)
     loss.backward()
 
     recon = genie(x)
