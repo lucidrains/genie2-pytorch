@@ -55,7 +55,12 @@ class Genie2(Module):
         attn_dim_head = 64,
         heads = 8,
         latent_channel_first = False,
-        transformer_kwargs: dict = dict(),
+        transformer_kwargs: dict = dict(
+            add_value_residual = True,
+            learned_value_residual_mix = True,
+            ff_glu = True,
+            use_rmsnorm = True,
+        ),
         vq_codebook_size = 4096,
         vq_kwargs: dict = dict(),
         encoder: Module = nn.Identity(),
