@@ -4,6 +4,12 @@
 
 Implementation of a framework for <a href="https://deepmind.google/discover/blog/genie-2-a-large-scale-foundation-world-model/">Genie2</a> in Pytorch
 
+## Install
+
+```bash
+$ pip install genie2-pytorch
+```
+
 ## Citations
 
 ```bibtex
