@@ -87,15 +87,12 @@ class Genie2(Module):
 
         self.vq_commit_loss_weight = vq_commit_loss_weight
 
-        self.transformer = nn.Sequential(
-            Decoder(
-                dim = dim,
-                depth = depth,
-                heads = heads,
-                attn_dim_head = attn_dim_head,
-                **transformer_kwargs
-            ),
-            nn.Linear(dim, dim)
+        self.transformer = Decoder(
+            dim = dim,
+            depth = depth,
+            heads = heads,
+            attn_dim_head = attn_dim_head,
+            **transformer_kwargs
         )
 
     def forward(
