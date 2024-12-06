@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from math import ceil
+from random import random
 from beartype import beartype
 from functools import partial
 
@@ -60,6 +62,7 @@ class Genie2(Module):
         attn_dim_head = 64,
         heads = 8,
         latent_channel_first = False,
+        cfg_train_action_dropout = 0.5,
         transformer_kwargs: dict = dict(
             add_value_residual = True,
             learned_value_residual_mix = True,
@@ -109,6 +112,10 @@ class Genie2(Module):
             **transformer_kwargs
         )
 
+        # needed for classifier free guidance
+
+        self.cfg_train_action_dropout = cfg_train_action_dropout
+
     def forward(
         self,
         state,
@@ -122,7 +129,13 @@ class Genie2(Module):
 
         # handle actions, but allow for state dynamics model to be trained independently
 
-        if exists(actions):
+        add_action_embed = (
+            exists(actions) and
+            random() >= self.cfg_train_action_dropout
+        )
+
+        if add_action_embed:
+
             assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
 
             assert actions.ndim in {2, 3} # either Int[b, n] or Int[b, n, a] -> for multiple keys being pressed
@@ -183,7 +196,7 @@ class Genie2(Module):
 
             labels = indices[:, 1:]
 
-            if exists(actions):
+            if add_action_embed:
                 action_embed = action_embed[:, :-1]
 
         # project in
@@ -192,7 +205,7 @@ class Genie2(Module):
 
         # add action conditioning, if needed
 
-        if exists(actions):
+        if add_action_embed:
             tokens = tokens + action_embed
 
         # autoregressive attention
