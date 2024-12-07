@@ -28,6 +28,7 @@ dependencies = [
     "beartype",
     "einx>=0.3.0",
     "einops>=0.8.0",
+    "jaxtyping",
     "imagen-pytorch>=2.1.0",
     "ring-attention-pytorch",
     "torch>=2.0",

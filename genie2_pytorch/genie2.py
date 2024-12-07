@@ -29,6 +29,33 @@ from x_transformers import (
 
 from imagen_pytorch import Imagen
 
+# tensor typing
+
+import jaxtyping
+from jaxtyping import jaxtyped
+from beartype import beartype
+
+class TorchTyping:
+    def __init__(self, abstract_dtype):
+        self.abstract_dtype = abstract_dtype
+
+    def __getitem__(self, shapes: str):
+        return self.abstract_dtype[Tensor, shapes]
+
+Float = TorchTyping(jaxtyping.Float)
+Int   = TorchTyping(jaxtyping.Int)
+Bool  = TorchTyping(jaxtyping.Bool)
+
+# einstein notation
+
+# b - batch
+# c - channels
+# t - time
+# h - height
+# w - width
+# n - sequence (flattened latent time * height * width)
+# a - number of actions (multiple keys pressed)
+
 # helper functions
 
 def exists(v):
@@ -166,8 +193,8 @@ class Genie2(Module):
     @torch.no_grad()
     def generate(
         self,
-        image,
-        num_frames,
+        image: Float['b c h w'],
+        num_frames: int,
         filter_kwargs: dict = dict(),
         temperature = 0.9,
         init_action: int | None = None,
@@ -274,7 +301,10 @@ class Genie2(Module):
 
         return video, actions
 
-    def encode_state(self, state):
+    def encode_state(
+        self,
+        state: Float['b c t h w']
+    ):
 
         time_seq_len = state.shape[2]
 
@@ -315,10 +345,10 @@ class Genie2(Module):
 
     def forward(
         self,
-        state = None,
-        state_codes = None,
-        time_seq_len = None,
-        actions = None,
+        state: Float['b c t h w'] | None = None,
+        state_codes: Int['b n'] = None,
+        time_seq_len: int | None = None,
+        actions: Int['b t'] | Int['b t a'] = None,
         return_loss = True
     ):
         assert exists(state) ^ exists(state_codes)
