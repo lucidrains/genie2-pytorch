@@ -69,7 +69,7 @@ def project(x, y):
 
 def valid_action_input(inp):
     inp = inp.split(',')
-    return all(i.isdigit() for i in inp)
+    return all(i.strip().isdigit() for i in inp)
 
 def is_unique(arruni):
     return len(arr) == len(set(arr))
@@ -221,7 +221,7 @@ class Genie2(Module):
                 if input_num_actions > max_actions:
                     actions = F.pad(actions, (0,  input_num_actions - max_actions), value = -1)
                     max_actions = input_num_actions
-                elif max_actions < input_num_actions:
+                elif input_num_actions < max_actions:
                     next_action = F.pad(next_action, (0,  max_actions - input_num_actions), value = -1)
 
                 actions = torch.cat((actions, next_action), dim = 1)
