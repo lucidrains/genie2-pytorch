@@ -104,3 +104,12 @@ assert generated_video.shape == (1, 768, 16 + 1, 2, 2)
     url     = {https://deepmind.google/discover/blog/genie-2-a-large-scale-foundation-world-model/}
 }
 ```
+
+```bibtex
+@inproceedings{Nguyen2024TurningUT,
+    title   = {Turning Up the Heat: Min-p Sampling for Creative and Coherent LLM Outputs},
+    author  = {Minh Nguyen and Andrew Baker and Clement Neo and Allen Roush and Andreas Kirsch and Ravid Shwartz-Ziv},
+    year    = {2024},
+    url     = {https://api.semanticscholar.org/CorpusID:270870613}
+}
+```
