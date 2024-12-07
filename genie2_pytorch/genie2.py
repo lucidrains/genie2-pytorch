@@ -196,9 +196,10 @@ class Genie2(Module):
         for frame in range(1, num_frames + 1):
 
             if interactive:
-                next_action = input(f'[frame {frame}] enter the next action (0 - {self.num_actions}): ')
+                while (maybe_next_action := input(f'[frame {frame}] enter the next action (0 - {self.num_actions}): ')) and not maybe_next_action.isdigit():
+                    print('invalid input, must be integer action')
 
-                next_action = tensor([int(next_action)], device = self.device)
+                next_action = tensor([int(maybe_next_action)], device = self.device)
                 actions, _ = pack((actions, next_action), 'b *')
 
             for _ in range(space_seq_len):
