@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import ceil
+from math import ceil, sqrt
 from random import random
 from beartype import beartype
 from functools import partial
@@ -132,40 +132,74 @@ class Genie2(Module):
 
         self.cfg_train_action_dropout = cfg_train_action_dropout
 
-    def forward(
+    @torch.no_grad()
+    def generate(
         self,
-        state,
-        actions = None,
-        return_loss = False
+        image,
+        num_frames
     ):
-        device = state.device
+        was_training = self.training
+        self.eval()
+
+        # ready image as single frame video
+
+        single_frame = rearrange(image, 'b c h w -> b c 1 h w')
+
+        # encode single frame
+
+        _, first_frame_code, _ = self.encode_state(single_frame)
+
+        # store all latent codes
+
+        space_seq_len = first_frame_code.shape[-1]
+
+        state_codes = first_frame_code
+
+        # autoregressive sample for number of frames
+
+        for _ in range(num_frames * space_seq_len):
+            logits = self.forward(
+                state_codes = state_codes,
+                time_seq_len = ceil(num_frames / space_seq_len),
+                return_loss = False
+            )
+
+            sampled = logits[:, -1].argmax(dim = -1)
+
+            state_codes, _ = pack([state_codes, sampled], 'b *')
+
+        # get all the latent codes
+
+        tokens = self.vq.get_codes_from_indices(state_codes)
+
+        # restore time and space dims
+
+        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', t = num_frames + 1, h = int(sqrt(space_seq_len)))
+
+        if self.latent_channel_first:
+            tokens = rearrange(tokens, 'b ... d -> b d ...')
+
+        need_fold_time_into_batch = not self.is_video_enc_dec
+
+        if need_fold_time_into_batch:
+            tokens = rearrange(tokens, 'b c t h w -> b t c h w')
+            tokens, unpack_time = pack_one(tokens, '* c h w')
+
+        # decode back to video
+
+        video = self.decoder(tokens)
+
+        if need_fold_time_into_batch:
+            video = unpack_time(video, '* c h w')
+            video = rearrange(video, 'b t c h w -> b c t h w')
+
+        self.train(was_training)
+
+        return video
+
+    def encode_state(self, state):
 
         time_seq_len = state.shape[2]
-
-        time_seq = torch.arange(time_seq_len, device = device)
-
-        # handle actions, but allow for state dynamics model to be trained independently
-
-        add_action_embed = (
-            exists(actions) and
-            random() >= self.cfg_train_action_dropout
-        )
-
-        if add_action_embed:
-            assert actions.shape[-1] == time_seq_len
-
-            assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
-
-            assert actions.ndim in {2, 3} # either Int[b, n] or Int[b, n, a] -> for multiple keys being pressed
-            actions, _ = pack_one(actions, 'b n *')
-
-            no_actions = actions < 0
-            actions = actions.masked_fill(no_actions, 0)
-
-            action_embed = self.action_embed(actions)
-            action_embed = einx.where('b n a, b n a d, -> b n a d', ~no_actions, action_embed, 0.)
-
-            action_embed = reduce(action_embed, 'b n a d -> b n d', 'sum')
 
         # only need to fold time into batch if not a video enc/dec (classic image enc/dec of today)
 
@@ -194,12 +228,71 @@ class Genie2(Module):
 
         assert latents.shape[-1] == self.dim_latent
 
+        # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
+
+        return self.vq(latents)
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def forward(
+        self,
+        state = None,
+        state_codes = None,
+        time_seq_len = None,
+        actions = None,
+        return_loss = True
+    ):
+        assert exists(state) ^ exists(state_codes)
+
+        device = self.device
+
+        if not exists(time_seq_len):
+            assert exists(state)
+            time_seq_len = state.shape[2]
+
+        time_seq = torch.arange(time_seq_len, device = device)
+
+        # handle actions, but allow for state dynamics model to be trained independently
+
+        # when training, adding action embedding depends on the condition dropout probability 
+
+        add_action_embed = (
+            exists(actions) and
+            (not self.training or random() >= self.cfg_train_action_dropout)
+        )
+
+        if add_action_embed:
+            assert actions.shape[-1] == time_seq_len
+
+            assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
+
+            assert actions.ndim in {2, 3} # either Int[b, n] or Int[b, n, a] -> for multiple keys being pressed
+            actions, _ = pack_one(actions, 'b n *')
+
+            no_actions = actions < 0
+            actions = actions.masked_fill(no_actions, 0)
+
+            action_embed = self.action_embed(actions)
+            action_embed = einx.where('b n a, b n a d, -> b n a d', ~no_actions, action_embed, 0.)
+
+            action_embed = reduce(action_embed, 'b n a d -> b n d', 'sum')
+
+        # encode the state, if state codes are given during sampling, fetch the codes from the vq codebook
+
+        if exists(state):
+            quantized_latents, latent_indices, commit_loss = self.encode_state(state)
+
+        elif exists(state_codes):
+            latent_indices = state_codes
+            quantized_latents = self.vq.get_codes_from_indices(latent_indices)
+
         # handle rotary positions
-
-        latent_seq_len = latents.shape[-2]
-        repeat_factor = ceil(latent_seq_len / time_seq_len)
-
         # repeat time across space
+
+        latent_seq_len = quantized_latents.shape[-2]
+        repeat_factor = ceil(latent_seq_len / time_seq_len)
 
         time_seq = repeat(time_seq, 'n -> (n r)', r = repeat_factor)
 
@@ -208,9 +301,7 @@ class Genie2(Module):
 
         time_rotary_pos = self.time_rotary(time_seq)
 
-        # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
-
-        quantized_latents, indices, commit_loss = self.vq(latents)
+        # if returning loss, setup labels for autoregressive loss
 
         if return_loss:
             quantized_latents = quantized_latents[:, :-1]
@@ -218,7 +309,7 @@ class Genie2(Module):
             rotary_pos, xpos_scale = time_rotary_pos
             time_rotary_pos = (rotary_pos[:, :-1], xpos_scale)
 
-            labels = indices[:, 1:]
+            labels = latent_indices[:, 1:]
 
             if add_action_embed:
                 action_embed = action_embed[:, :-1]
@@ -245,61 +336,44 @@ class Genie2(Module):
 
         # cross entropy loss off the vq codebook
 
-        if return_loss:
-            codebook = self.vq.codebook
+        codebook = self.vq.codebook
 
-            logits = -torch.cdist(tokens, codebook)
+        logits = -torch.cdist(tokens, codebook)
 
-            state_autoregressive_loss = F.cross_entropy(
-                rearrange(logits, 'b n l -> b l n'),
-                labels,
-                ignore_index = -1
-            )
+        if not return_loss:
+            return logits
 
-            total_loss = (
-                state_autoregressive_loss +
-                commit_loss * self.vq_commit_loss_weight
-            )
+        state_autoregressive_loss = F.cross_entropy(
+            rearrange(logits, 'b n l -> b l n'),
+            labels,
+            ignore_index = -1
+        )
 
-            return total_loss, (state_autoregressive_loss, commit_loss)
+        total_loss = (
+            state_autoregressive_loss +
+            commit_loss * self.vq_commit_loss_weight
+        )
 
-        # restore time and space
-
-        tokens = unpack_time_space_dims(tokens)
-
-        if self.latent_channel_first:
-            tokens = rearrange(tokens, 'b ... d -> b d ...')
-
-        if need_fold_time_into_batch:
-            tokens = rearrange(tokens, 'b c t h w -> b t c h w')
-            tokens, unpack_time = pack_one(tokens, '* c h w')
-
-        # decode back to video
-
-        decoded = self.decoder(tokens)
-
-        if need_fold_time_into_batch:
-            decoded = unpack_time(decoded, '* c h w')
-            decoded = rearrange(decoded, 'b t c h w -> b c t h w')
-
-        return decoded
+        return total_loss, (state_autoregressive_loss, commit_loss)
 
 # quick test
 
 if __name__ == '__main__':
     genie = Genie2(
         dim = 512,
+        depth = 1,
         dim_latent = 768,
         num_actions = 256,
         latent_channel_first = True,
         is_video_enc_dec = True
     )
 
-    x = torch.randn(2, 768, 3, 2, 2)
+    video = torch.randn(2, 768, 3, 2, 2)
     actions = torch.randint(0, 256, (2, 3))
 
-    loss, breakdown = genie(x, actions = actions, return_loss = True)
+    loss, breakdown = genie(video, actions = actions)
     loss.backward()
 
-    recon = genie(x, actions = actions)
-    assert recon.shape == x.shape
+    generated_video = genie.generate(video[:, :, 0], num_frames = 16)
+
+    assert generated_video.shape == (2, 768, 16 + 1, 2, 2)

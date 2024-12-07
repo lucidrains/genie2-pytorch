@@ -10,6 +10,32 @@ Implementation of a framework for <a href="https://deepmind.google/discover/blog
 $ pip install genie2-pytorch
 ```
 
+## Usage
+
+```python
+import torch
+from genie2_pytorch import Genie2
+
+genie = Genie2(
+    dim = 512,
+    depth = 12,
+    dim_latent = 768,
+    num_actions = 256,
+    latent_channel_first = True,
+    is_video_enc_dec = True
+)
+
+video = torch.randn(2, 768, 3, 2, 2)
+actions = torch.randint(0, 256, (2, 3))
+
+loss, breakdown = genie(video, actions = actions)
+loss.backward()
+
+generated_video = genie.generate(video[:, :, 0], num_frames = 16)
+
+assert generated_video.shape == (2, 768, 16 + 1, 2, 2)
+```
+
 ## Citations
 
 ```bibtex
