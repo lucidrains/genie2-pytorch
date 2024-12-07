@@ -141,6 +141,7 @@ class Genie2(Module):
         device = state.device
 
         time_seq_len = state.shape[2]
+
         time_seq = torch.arange(time_seq_len, device = device)
 
         # handle actions, but allow for state dynamics model to be trained independently
@@ -151,6 +152,7 @@ class Genie2(Module):
         )
 
         if add_action_embed:
+            assert actions.shape[-1] == time_seq_len
 
             assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
 
@@ -196,7 +198,13 @@ class Genie2(Module):
 
         latent_seq_len = latents.shape[-2]
         repeat_factor = ceil(latent_seq_len / time_seq_len)
+
+        # repeat time across space
+
         time_seq = repeat(time_seq, 'n -> (n r)', r = repeat_factor)
+
+        if add_action_embed:
+            action_embed = repeat(action_embed, 'b n d-> b (n r) d', r = repeat_factor)
 
         time_rotary_pos = self.time_rotary(time_seq)
 
@@ -288,7 +296,7 @@ if __name__ == '__main__':
     )
 
     x = torch.randn(2, 768, 3, 2, 2)
-    actions = torch.randint(0, 256, (2, 12))
+    actions = torch.randint(0, 256, (2, 3))
 
     loss, breakdown = genie(x, actions = actions, return_loss = True)
     loss.backward()
