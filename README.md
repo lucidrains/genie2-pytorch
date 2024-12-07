@@ -64,6 +64,8 @@ generated_video, actions = genie.generate(
     init_action = 0
 )
 
+# you will be prompted to enter the next action id(s) at every next time frame of the video
+
 assert generated_video.shape == (1, 768, 16 + 1, 2, 2)
 ```
 
