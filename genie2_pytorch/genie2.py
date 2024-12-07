@@ -65,6 +65,15 @@ def project(x, y):
 
     return inverse(parallel).to(dtype), inverse(orthogonal).to(dtype)
 
+# input action related helprs
+
+def valid_action_input(inp):
+    inp = inp.split(',')
+    return all(i.isdigit() for i in inp)
+
+def is_unique(arruni):
+    return len(arr) == len(set(arr))
+
 # sampling helpers
 
 def log(t, eps = 1e-20):
@@ -173,7 +182,9 @@ class Genie2(Module):
             assert image.shape[0] == 1
             assert exists(init_action), f'init_action must be given as an integer from 0 - {self.num_actions - 1}'
 
-            actions = tensor([[init_action]], device = self.device)
+            actions = tensor([[[init_action]]], device = self.device)
+            max_actions = 1
+
         else:
             actions = None
 
@@ -196,11 +207,24 @@ class Genie2(Module):
         for frame in range(1, num_frames + 1):
 
             if interactive:
-                while (maybe_next_action := input(f'[frame {frame}] enter the next action (0 - {self.num_actions}): ')) and not maybe_next_action.isdigit():
-                    print('invalid input, must be integer action')
+                while (maybe_next_action := input(f'[frame {frame}] enter the next action (0 - {self.num_actions}): ')) and not valid_action_input(maybe_next_action):
+                    print('invalid input, must be integer action - multiple actions need to be all integers separated by commas [ex. "1,3,24"]')
 
-                next_action = tensor([int(maybe_next_action)], device = self.device)
-                actions, _ = pack((actions, next_action), 'b *')
+                maybe_next_actions = [*map(int, maybe_next_action.split(','))]
+                maybe_next_actions = [*set(maybe_next_actions)]
+
+                next_action = tensor(maybe_next_actions, device = self.device)
+                next_action = rearrange(next_action, 'a -> 1 1 a')
+
+                input_num_actions = next_action.shape[-1]
+
+                if input_num_actions > max_actions:
+                    actions = F.pad(actions, (0,  input_num_actions - max_actions), value = -1)
+                    max_actions = input_num_actions
+                elif max_actions < input_num_actions:
+                    next_action = F.pad(next_action, (0,  max_actions - input_num_actions), value = -1)
+
+                actions = torch.cat((actions, next_action), dim = 1)
 
             for _ in range(space_seq_len):
 
@@ -317,7 +341,7 @@ class Genie2(Module):
         )
 
         if add_action_embed:
-            assert actions.shape[-1] == time_seq_len
+            assert actions.shape[1] == time_seq_len
 
             assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
 
