@@ -1,6 +1,6 @@
 [project]
 name = "genie2-pytorch"
-version = "0.0.2"
+version = "0.0.3"
 description = "Genie2"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -28,7 +28,6 @@ dependencies = [
     "beartype",
     "einx>=0.3.0",
     "einops>=0.8.0",
-    "classifier-free-guidance-pytorch>=0.7.1",
     "imagen-pytorch>=2.1.0",
     "ring-attention-pytorch",
     "torch>=2.0",

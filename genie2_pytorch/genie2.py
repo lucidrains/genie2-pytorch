@@ -65,6 +65,27 @@ def project(x, y):
 
     return inverse(parallel).to(dtype), inverse(orthogonal).to(dtype)
 
+# sampling helpers
+
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
+
+def gumbel_noise(t):
+    noise = torch.zeros_like(t).uniform_(0, 1)
+    return -log(-log(noise))
+
+def gumbel_sample(t, temperature = 1., dim = -1, keepdim = True):
+    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim, keepdim = keepdim)
+
+# min_p
+# https://arxiv.org/abs/2407.01082
+
+def min_p_filter(logits, min_p = 0.1):
+    probs = logits.softmax(dim = -1)
+    max_probs = probs.amax(dim = -1, keepdim = True)
+    limit = min_p * max_probs
+    return torch.where(probs < limit, float('-inf'), logits)
+
 # main class
 
 class Genie2(Module):
@@ -136,7 +157,9 @@ class Genie2(Module):
     def generate(
         self,
         image,
-        num_frames
+        num_frames,
+        filter_kwargs: dict = dict(),
+        temperature = 0.9
     ):
         was_training = self.training
         self.eval()
@@ -164,7 +187,10 @@ class Genie2(Module):
                 return_loss = False
             )
 
-            sampled = logits[:, -1].argmax(dim = -1)
+            last_logit = logits[:, -1]
+            last_logit = min_p_filter(last_logit, **filter_kwargs)
+
+            sampled = gumbel_sample(last_logit, temperature = temperature)
 
             state_codes, _ = pack([state_codes, sampled], 'b *')
 
