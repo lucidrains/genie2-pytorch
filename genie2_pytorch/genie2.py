@@ -436,25 +436,3 @@ class Genie2(Module):
         )
 
         return total_loss, (state_autoregressive_loss, commit_loss)
-
-# quick test
-
-if __name__ == '__main__':
-    genie = Genie2(
-        dim = 512,
-        depth = 1,
-        dim_latent = 768,
-        num_actions = 256,
-        latent_channel_first = True,
-        is_video_enc_dec = True
-    )
-
-    video = torch.randn(2, 768, 3, 2, 2)
-    actions = torch.randint(0, 256, (2, 3))
-
-    loss, breakdown = genie(video, actions = actions)
-    loss.backward()
-
-    generated_video = genie.generate(video[:, :, 0], num_frames = 16)
-
-    assert generated_video.shape == (2, 768, 16 + 1, 2, 2)
