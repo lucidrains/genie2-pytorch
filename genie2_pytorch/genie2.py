@@ -6,7 +6,7 @@ from beartype import beartype
 from functools import partial
 
 import torch
-from torch import nn
+from torch import nn, tensor
 import torch.nn.functional as F
 from torch.nn import Module, ModuleList
 
@@ -115,6 +115,7 @@ class Genie2(Module):
     ):
         super().__init__()
 
+        self.num_actions = num_actions
         self.action_embed = nn.Embedding(num_actions, dim) if exists(num_actions) else None
 
         self.encoder = encoder
@@ -159,10 +160,22 @@ class Genie2(Module):
         image,
         num_frames,
         filter_kwargs: dict = dict(),
-        temperature = 0.9
+        temperature = 0.9,
+        init_action: int | None = None,
+        interactive = False
     ):
         was_training = self.training
         self.eval()
+
+        # if interactive is set to True, only allow for sampling one video trajectory at a time
+
+        if interactive:
+            assert image.shape[0] == 1
+            assert exists(init_action), f'init_action must be given as an integer from 0 - {self.num_actions - 1}'
+
+            actions = tensor([[init_action]], device = self.device)
+        else:
+            actions = None
 
         # ready image as single frame video
 
@@ -180,19 +193,29 @@ class Genie2(Module):
 
         # autoregressive sample for number of frames
 
-        for _ in range(num_frames * space_seq_len):
-            logits = self.forward(
-                state_codes = state_codes,
-                time_seq_len = ceil(num_frames / space_seq_len),
-                return_loss = False
-            )
+        for frame in range(1, num_frames + 1):
 
-            last_logit = logits[:, -1]
-            last_logit = min_p_filter(last_logit, **filter_kwargs)
+            if interactive:
+                next_action = input(f'[frame {frame}] enter the next action (0 - {self.num_actions}): ')
 
-            sampled = gumbel_sample(last_logit, temperature = temperature)
+                next_action = tensor([int(next_action)], device = self.device)
+                actions, _ = pack((actions, next_action), 'b *')
 
-            state_codes, _ = pack([state_codes, sampled], 'b *')
+            for _ in range(space_seq_len):
+
+                logits = self.forward(
+                    state_codes = state_codes,
+                    time_seq_len = frame + 1,
+                    actions = actions,
+                    return_loss = False,
+                )
+
+                last_logit = logits[:, -1]
+                last_logit = min_p_filter(last_logit, **filter_kwargs)
+
+                sampled = gumbel_sample(last_logit, temperature = temperature)
+
+                state_codes, _ = pack([state_codes, sampled], 'b *')
 
         # get all the latent codes
 
@@ -221,7 +244,10 @@ class Genie2(Module):
 
         self.train(was_training)
 
-        return video
+        if not interactive:
+            return video
+
+        return video, actions
 
     def encode_state(self, state):
 
@@ -344,9 +370,13 @@ class Genie2(Module):
 
         tokens = self.latent_to_model(quantized_latents)
 
+        tokens_seq_len = tokens.shape[-2]
+
         # add action conditioning, if needed
 
         if add_action_embed:
+            action_embed = action_embed[:, :tokens_seq_len]
+
             tokens = tokens + action_embed
 
         # autoregressive attention

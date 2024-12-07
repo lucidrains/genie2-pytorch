@@ -36,6 +36,37 @@ generated_video = genie.generate(video[:, :, 0], num_frames = 16)
 assert generated_video.shape == (2, 768, 16 + 1, 2, 2)
 ```
 
+Interactive
+
+```python
+import torch
+from genie2_pytorch import Genie2
+
+genie = Genie2(
+    dim = 512,
+    depth = 12,
+    dim_latent = 768,
+    num_actions = 256,
+    latent_channel_first = True,
+    is_video_enc_dec = True
+)
+
+video = torch.randn(1, 768, 3, 2, 2)
+actions = torch.randint(0, 256, (1, 3))
+
+loss, breakdown = genie(video, actions = actions)
+loss.backward()
+
+generated_video, actions = genie.generate(
+    video[:, :, 0],
+    num_frames = 16,
+    interactive = True,
+    init_action = 0
+)
+
+assert generated_video.shape == (1, 768, 16 + 1, 2, 2)
+```
+
 ## Citations
 
 ```bibtex
