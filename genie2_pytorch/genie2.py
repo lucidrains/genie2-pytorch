@@ -372,6 +372,7 @@ class Genie2(Module):
         state_codes: Int['b n'] = None,
         time_seq_len: int | None = None,
         actions: Int['b t'] | Int['b t a'] = None,
+        sort_actions = True, # take care of sorting the actions, with any value below 0 as padding
         return_loss = True
     ):
         assert exists(state) ^ exists(state_codes)
@@ -394,11 +395,18 @@ class Genie2(Module):
         )
 
         if add_action_embed:
+            assert actions.ndim in {2, 3} # either Int[b, n] or Int[b, n, a] -> for multiple keys being pressed
             assert actions.shape[1] == time_seq_len
+
+            is_multi_action = actions.ndim == 3
+
+            if is_multi_action and sort_actions:
+                actions = actions.masked_fill(actions < 0, 1e6)
+                actions = actions.sort(dim = -1).values
+                actions = actions.masked_fill(actions == 1e6, -1)
 
             assert exists(self.action_embed), '`num_actions` must be defined for action embedding on Genie2 before dynamics model can be conditioned on actions'
 
-            assert actions.ndim in {2, 3} # either Int[b, n] or Int[b, n, a] -> for multiple keys being pressed
             actions, _ = pack_one(actions, 'b n *')
 
             no_actions = actions < 0
