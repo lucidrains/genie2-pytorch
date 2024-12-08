@@ -211,7 +211,8 @@ class Genie2(Module):
         temperature = 0.9,
         init_action: int | None = None,
         interactive = False,
-        interactive_save_last_frame = True
+        interactive_save_last_frame = True,
+        cond_scale = 1.,
     ):
         was_training = self.training
         self.eval()
@@ -291,11 +292,11 @@ class Genie2(Module):
 
             for _ in range(space_seq_len):
 
-                logits = self.forward(
+                logits = self.forward_with_cfg(
                     state_codes = state_codes,
                     time_seq_len = frame + 1,
                     actions = actions,
-                    return_loss = False,
+                    cond_scale = cond_scale
                 )
 
                 last_logit = logits[:, -1]
@@ -378,6 +379,35 @@ class Genie2(Module):
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def forward_with_cfg(
+        self,
+        *args,
+        actions,
+        cond_scale = 1.,
+        **kwargs
+    ):
+        if not exists(actions):
+            return self.forward(*args, return_loss = False, **kwargs)
+
+        logits = self.forward(
+            *args,
+            actions = actions,
+            return_loss = False,
+            **kwargs
+        )
+
+        if cond_scale == 1:
+            return logits
+
+        null_logits = self.forward(
+            *args,
+            actions = None,
+            return_loss = False,
+            **kwargs
+        )
+
+        return null_logits + (logits - null_logits) * cond_scale
 
     def forward(
         self,
