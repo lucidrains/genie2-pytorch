@@ -245,8 +245,6 @@ class Genie2(Module):
                     if self.latent_channel_first:
                         last_frame_tokens = rearrange(last_frame_tokens, 'b ... d -> b d ...')
 
-                    need_fold_time_into_batch = not self.is_video_enc_dec
-
                     last_frame = self.decoder(last_frame_tokens)
                     last_frame = last_frame[0].cpu().detach()
                     channels = last_frame.shape[0]
