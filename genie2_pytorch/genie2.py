@@ -56,6 +56,8 @@ Bool  = TorchTyping(jaxtyping.Bool)
 # h - height
 # w - width
 # n - sequence (flattened latent time * height * width)
+# s - space sequence
+# l - logits
 # a - number of actions (multiple keys pressed)
 
 # helper functions
@@ -146,6 +148,7 @@ class Genie2(Module):
         encoder: Module = nn.Identity(),
         decoder: Module = nn.Identity(),
         vq_commit_loss_weight = 1.,
+        action_autoregressive_loss_weight = 0.1,
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
     ):
         super().__init__()
@@ -184,6 +187,16 @@ class Genie2(Module):
             attn_dim_head = attn_dim_head,
             **transformer_kwargs
         )
+
+        # behavioral cloning loss weight
+
+        has_action_loss = action_autoregressive_loss_weight > 0.
+        self.to_action_pred = nn.Linear(dim, num_actions, bias = False) if has_action_loss else None
+
+        self.has_action_loss = has_action_loss
+        self.action_autoregressive_loss_weight = action_autoregressive_loss_weight
+
+        self.register_buffer('zero', torch.tensor(0.), persistent = False)
 
         # needed for classifier free guidance
 
@@ -430,12 +443,12 @@ class Genie2(Module):
         # repeat time across space
 
         latent_seq_len = quantized_latents.shape[-2]
-        repeat_factor = ceil(latent_seq_len / time_seq_len)
+        spatial_repeat_factor = ceil(latent_seq_len / time_seq_len)
 
-        time_seq = repeat(time_seq, 'n -> (n r)', r = repeat_factor)
+        time_seq = repeat(time_seq, 'n -> (n r)', r = spatial_repeat_factor)
 
         if add_action_embed:
-            action_embed = repeat(action_embed, 'b n d-> b (n r) d', r = repeat_factor)
+            action_embed = repeat(action_embed, 'b n d-> b (n r) d', r = spatial_repeat_factor)
 
         time_rotary_pos = self.time_rotary(time_seq)
 
@@ -449,8 +462,12 @@ class Genie2(Module):
 
             labels = latent_indices[:, 1:]
 
+            action_labels = None
+
             if add_action_embed:
                 action_embed = action_embed[:, :-1]
+
+                action_labels = actions[:, 1:]
 
         # project in
 
@@ -467,14 +484,31 @@ class Genie2(Module):
 
         # autoregressive attention
 
-        tokens = self.transformer(
+        embed = self.transformer(
             tokens,
             rotary_pos_emb = time_rotary_pos
         )
 
+        # maybe action prediction
+
+        if return_loss and self.has_action_loss:
+            is_single_action = actions.ndim == 2 or actions.shape[-1] == 1
+            assert is_single_action
+
+            action_time_len = tokens_seq_len // spatial_repeat_factor
+            round_down_by_space_len = action_time_len * spatial_repeat_factor
+            action_embed = reduce(embed[:, :round_down_by_space_len], 'b (t s) d -> b t d', 'mean', t = action_time_len)
+
+            action_logits = self.to_action_pred(action_embed)
+
+            if actions.ndim == 3:
+                actions = rearrange(actions, '... 1 -> ...')
+
+            action_labels = actions[:, 1:]
+
         # project out
 
-        tokens = self.model_to_latent(tokens)
+        tokens = self.model_to_latent(embed)
 
         # cross entropy loss off the vq codebook
 
@@ -496,4 +530,21 @@ class Genie2(Module):
             commit_loss * self.vq_commit_loss_weight
         )
 
-        return total_loss, (state_autoregressive_loss, commit_loss)
+        # maybe behavioral cloning
+
+        action_loss = self.zero
+
+        if self.has_action_loss:
+
+            action_loss = F.cross_entropy(
+                rearrange(action_logits, 'b n l -> b l n'),
+                action_labels,
+                ignore_index = -1
+            )
+
+            total_loss = (
+                total_loss +
+                action_loss * self.action_autoregressive_loss_weight
+            )
+
+        return total_loss, (state_autoregressive_loss, commit_loss, action_loss)
