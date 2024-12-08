@@ -10,6 +10,8 @@ from torch import nn, tensor
 import torch.nn.functional as F
 from torch.nn import Module, ModuleList
 
+from torchvision.utils import save_image
+
 import einx
 from einops import rearrange, reduce, repeat, pack, unpack
 
@@ -97,9 +99,6 @@ def project(x, y):
 def valid_action_input(inp):
     inp = inp.split(',')
     return all(i.strip().isdigit() for i in inp)
-
-def is_unique(arruni):
-    return len(arr) == len(set(arr))
 
 # sampling helpers
 
@@ -198,7 +197,8 @@ class Genie2(Module):
         filter_kwargs: dict = dict(),
         temperature = 0.9,
         init_action: int | None = None,
-        interactive = False
+        interactive = False,
+        interactive_save_last_frame = True
     ):
         was_training = self.training
         self.eval()
@@ -226,6 +226,7 @@ class Genie2(Module):
         # store all latent codes
 
         space_seq_len = first_frame_code.shape[-1]
+        height = int(sqrt(space_seq_len)) # assume square for now
 
         state_codes = first_frame_code
 
@@ -234,6 +235,30 @@ class Genie2(Module):
         for frame in range(1, num_frames + 1):
 
             if interactive:
+
+                # before prompting the human model, show the human the last image from the world model
+
+                if interactive_save_last_frame:
+                    unpacked_codes = rearrange(state_codes, 'b (t h w) -> b t h w', h = height, w = height)
+                    last_frame_tokens = self.vq.get_codes_from_indices(unpacked_codes[:, -1])
+
+                    if self.latent_channel_first:
+                        last_frame_tokens = rearrange(last_frame_tokens, 'b ... d -> b d ...')
+
+                    need_fold_time_into_batch = not self.is_video_enc_dec
+
+                    last_frame = self.decoder(last_frame_tokens)
+                    last_frame = last_frame[0].cpu().detach()
+                    channels = last_frame.shape[0]
+
+                    if channels <= 4: # assume valid image type if feature dimension is 4 or less
+                        last_frame.clamp_(0., 1.)
+                        save_image(last_frame, './last-frame.png')
+                    else:
+                        torch.save(last_frame, f'./last-frame.pt')
+
+                # prompt human
+
                 while (maybe_next_action := input(f'[frame {frame}] enter the next action (0 - {self.num_actions}): ')) and not valid_action_input(maybe_next_action):
                     print('invalid input, must be integer action - multiple actions need to be all integers separated by commas [ex. "1,3,24"]')
 
@@ -275,7 +300,7 @@ class Genie2(Module):
 
         # restore time and space dims
 
-        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', t = num_frames + 1, h = int(sqrt(space_seq_len)))
+        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', t = num_frames + 1, h = height)
 
         if self.latent_channel_first:
             tokens = rearrange(tokens, 'b ... d -> b d ...')
