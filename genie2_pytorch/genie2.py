@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from math import ceil, sqrt
 from random import random
-from beartype import beartype
 from functools import partial
 
 import torch
@@ -34,7 +33,6 @@ from imagen_pytorch import Imagen
 # tensor typing
 
 import jaxtyping
-from jaxtyping import jaxtyped
 from beartype import beartype
 
 class TorchTyping:
@@ -213,6 +211,7 @@ class Genie2(Module):
         interactive = False,
         interactive_save_last_frame = True,
         cond_scale = 1.,
+        **model_forward_kwargs
     ):
         was_training = self.training
         self.eval()
@@ -267,7 +266,7 @@ class Genie2(Module):
                         last_frame.clamp_(0., 1.)
                         save_image(last_frame, './last-frame.png')
                     else:
-                        torch.save(last_frame, f'./last-frame.pt')
+                        torch.save(last_frame, './last-frame.pt')
 
                 # prompt human
 
@@ -296,7 +295,8 @@ class Genie2(Module):
                     state_codes = state_codes,
                     time_seq_len = frame + 1,
                     actions = actions,
-                    cond_scale = cond_scale
+                    cond_scale = cond_scale,
+                    **model_forward_kwargs
                 )
 
                 last_logit = logits[:, -1]
@@ -342,8 +342,6 @@ class Genie2(Module):
         self,
         state: Float['b c t h w']
     ):
-
-        time_seq_len = state.shape[2]
 
         # only need to fold time into batch if not a video enc/dec (classic image enc/dec of today)
 
