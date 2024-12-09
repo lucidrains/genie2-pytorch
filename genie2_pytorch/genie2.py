@@ -385,6 +385,7 @@ class Genie2(Module):
         *args,
         actions,
         cond_scale = 1.,
+        parallel_keep_frac = 0.,
         **kwargs
     ):
         if not exists(actions):
@@ -407,7 +408,13 @@ class Genie2(Module):
             **kwargs
         )
 
-        return null_logits + (logits - null_logits) * cond_scale
+        update = logits - null_logits
+
+        parallel, orthog = project(update, logits)
+
+        update = parallel * parallel_keep_frac + orthog # wipe out the parallel component
+
+        return logits + update * (cond_scale - 1)
 
     def forward(
         self,
