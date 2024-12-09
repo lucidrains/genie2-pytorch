@@ -141,11 +141,22 @@ class Genie2(Module):
             ff_glu = True,
             use_rmsnorm = True,
         ),
+        action_transformer_kwargs: dict = dict(
+            add_value_residual = True,
+            learned_value_residual_mix = True,
+            ff_glu = True,
+            use_rmsnorm = True,
+            depth = 2,
+            heads = 4,
+            attn_dim_head = 64
+        ),
         vq_codebook_size = 4096,
         vq_kwargs: dict = dict(),
         encoder: Module = nn.Identity(),
         decoder: Module = nn.Identity(),
         vq_commit_loss_weight = 1.,
+        allow_multiple_actions = False,
+        max_num_actions = 10,
         action_autoregressive_loss_weight = 0.1,
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
     ):
@@ -186,12 +197,34 @@ class Genie2(Module):
             **transformer_kwargs
         )
 
-        # behavioral cloning loss weight
+        # action related
+
+        self.allow_multiple_actions = allow_multiple_actions
+        self.max_num_actions = max_num_actions # in the case multiple actions are allowed, maximum number of actions allowed
 
         has_action_loss = action_autoregressive_loss_weight > 0.
-        self.to_action_pred = nn.Linear(dim, num_actions, bias = False) if has_action_loss else None
-
         self.has_action_loss = has_action_loss
+
+        self.to_action_pred = None
+
+        if has_action_loss:
+            if allow_multiple_actions:
+                dim_action_transformer = dim // 2
+
+                self.action_eos_id = num_actions
+                self.action_pos_embed = nn.Parameter(torch.zeros(max_num_actions, dim))
+
+                self.to_action_pred = nn.Sequential(
+                    nn.Linear(dim, dim_action_transformer, bias = False),
+                    Decoder(
+                        dim = dim_action_transformer,
+                        **action_transformer_kwargs
+                    ),
+                    nn.Linear(dim_action_transformer, num_actions + 1, bias = False)
+                )
+            else:
+                self.to_action_pred = nn.Linear(dim, num_actions, bias = False)
+
         self.action_autoregressive_loss_weight = action_autoregressive_loss_weight
 
         self.register_buffer('zero', torch.tensor(0.), persistent = False)
@@ -275,6 +308,11 @@ class Genie2(Module):
 
                 maybe_next_actions = [*map(int, maybe_next_action.split(','))]
                 maybe_next_actions = [*set(maybe_next_actions)]
+
+                if not self.allow_multiple_actions:
+                    assert len(maybe_next_actions) == 1, f'you cannot interact with multiple actions if `allow_multiple_actions` is not set to `True`'
+                else:
+                    assert len(maybe_next_actions) <= self.max_num_actions, f'maximum number of actions is set at {self.max_num_actions}'
 
                 next_action = tensor(maybe_next_actions, device = self.device)
                 next_action = rearrange(next_action, 'a -> 1 1 a')
@@ -524,23 +562,6 @@ class Genie2(Module):
             rotary_pos_emb = time_rotary_pos
         )
 
-        # maybe action prediction
-
-        if return_loss and self.has_action_loss:
-            is_single_action = actions.ndim == 2 or actions.shape[-1] == 1
-            assert is_single_action
-
-            action_time_len = tokens_seq_len // spatial_repeat_factor
-            round_down_by_space_len = action_time_len * spatial_repeat_factor
-            action_embed = reduce(embed[:, :round_down_by_space_len], 'b (t s) d -> b t d', 'mean', t = action_time_len)
-
-            action_logits = self.to_action_pred(action_embed)
-
-            if actions.ndim == 3:
-                actions = rearrange(actions, '... 1 -> ...')
-
-            action_labels = actions[:, 1:]
-
         # project out
 
         tokens = self.model_to_latent(embed)
@@ -565,11 +586,49 @@ class Genie2(Module):
             commit_loss * self.vq_commit_loss_weight
         )
 
-        # maybe behavioral cloning
+        # maybe action loss
 
         action_loss = self.zero
 
         if self.has_action_loss:
+            is_single_action = actions.ndim == 2 or actions.shape[-1] == 1
+
+            if not self.allow_multiple_actions:
+                assert is_single_action, 'you need to set `allow_multiple_actions = True` on init to learn and decode multiple actions'
+
+            action_time_len = tokens_seq_len // spatial_repeat_factor
+            round_down_by_space_len = action_time_len * spatial_repeat_factor
+            action_embed = reduce(embed[:, :round_down_by_space_len], 'b (t s) d -> b t d', 'mean', t = action_time_len)
+
+            if is_single_action:
+                action_logits = self.to_action_pred(action_embed)
+
+                if actions.ndim == 3:
+                    actions = rearrange(actions, '... 1 -> ...')
+
+                action_labels = actions[:, 1:]
+
+            else:
+                actions, _ = pack_one(actions, 'b n *')
+                inp_num_actions = actions.shape[-1]
+                assert inp_num_actions <= self.max_num_actions, f'maximum number of actions is set at {self.max_num_actions}'
+
+                action_embed = rearrange(action_embed, 'b t d -> (b t) 1 d')
+                action_pos_embed = repeat(self.action_pos_embed[:inp_num_actions], 'a d -> bt a d', bt = action_embed.shape[0])
+
+                action_embed = torch.cat((action_embed, action_pos_embed), dim = -2)
+
+                action_logits = self.to_action_pred(action_embed)
+
+                # prepare the action labels, adding the action end token appropriately
+
+                action_labels = actions[:, 1:]
+                action_labels = F.pad(action_labels, (0, 1), value = -1)
+                num_actions_per_time = (action_labels >= 0).sum(dim = -1, keepdim = True)
+                action_labels = action_labels.scatter(-1, num_actions_per_time, self.action_eos_id)
+                action_labels = rearrange(action_labels, 'b t a -> (b t) a')
+
+            # cross entropy loss for predicted action on the action transformer head (hierarchical transformer)
 
             action_loss = F.cross_entropy(
                 rearrange(action_logits, 'b n l -> b l n'),
