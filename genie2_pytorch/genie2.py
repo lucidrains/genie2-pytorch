@@ -121,6 +121,30 @@ def min_p_filter(logits, min_p = 0.1):
     limit = min_p * max_probs
     return torch.where(probs < limit, float('-inf'), logits)
 
+# wrapper for adding meta tokens
+
+class MetaTokenWrapper(Module):
+    def __init__(
+        self,
+        fn: Decoder,
+        num_meta_tokens
+    ):
+        super().__init__()
+        self.fn = fn
+        self.meta_tokens = nn.Parameter(torch.zeros(num_meta_tokens, fn.dim))
+
+    def forward(self, x, *args, **kwargs):
+
+        meta_tokens = repeat(self.meta_tokens, '... -> b ...', b = x.shape[0])
+
+        x, packed_shape = pack([meta_tokens, x], 'b * d')
+
+        out = self.fn(x, *args, **kwargs)
+
+        _, out = unpack(out, packed_shape, 'b * d')
+
+        return out
+
 # main class
 
 class Genie2(Module):
@@ -150,6 +174,7 @@ class Genie2(Module):
             heads = 4,
             attn_dim_head = 64
         ),
+        num_meta_tokens = 16, # meta tokens used in Hymba https://www.arxiv.org/abs/2411.13676
         vq_codebook_size = 4096,
         vq_kwargs: dict = dict(),
         encoder: Module = nn.Identity(),
@@ -189,13 +214,20 @@ class Genie2(Module):
 
         self.vq_commit_loss_weight = vq_commit_loss_weight
 
-        self.transformer = Decoder(
+        # wrapper for adding meta tokens
+
+        self.num_meta_tokens = num_meta_tokens
+        meta_token_wrapper = partial(MetaTokenWrapper, num_meta_tokens = num_meta_tokens) if num_meta_tokens > 0. else identity
+
+        # main "world model" dynamics model transformer
+
+        self.transformer = meta_token_wrapper(Decoder(
             dim = dim,
             depth = depth,
             heads = heads,
             attn_dim_head = attn_dim_head,
             **transformer_kwargs
-        )
+        ))
 
         # action related
 
@@ -216,10 +248,10 @@ class Genie2(Module):
 
                 self.to_action_pred = nn.Sequential(
                     nn.Linear(dim, dim_action_transformer, bias = False),
-                    Decoder(
+                    meta_token_wrapper(dim, Decoder(
                         dim = dim_action_transformer,
                         **action_transformer_kwargs
-                    ),
+                    )),
                     nn.Linear(dim_action_transformer, num_actions + 1, bias = False)
                 )
             else:
@@ -519,6 +551,10 @@ class Genie2(Module):
         spatial_repeat_factor = ceil(latent_seq_len / time_seq_len)
 
         time_seq = repeat(time_seq, 'n -> (n r)', r = spatial_repeat_factor)
+
+        # give meta tokens position of -1
+
+        time_seq = F.pad(time_seq, (self.num_meta_tokens, 0), value = -1)
 
         if add_action_embed:
             action_embed = repeat(action_embed, 'b n d-> b (n r) d', r = spatial_repeat_factor)
