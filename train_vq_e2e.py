@@ -108,7 +108,7 @@ class VQImageAutoregressiveAutoencoder(Module):
     def sample(
         self,
         num_samples = 64,
-        min_p = 0.9,
+        min_p = 0.5,
         temperature = 1.5
     ):
         self.eval()
@@ -192,7 +192,7 @@ model = VQImageAutoregressiveAutoencoder(
     dim = 256,
     depth = 4,
     codebook_size = 64,
-    decay = 0.8,
+    decay = 0.95,
     image_size = 28,
     patch_size = 4
 )
