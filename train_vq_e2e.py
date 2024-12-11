@@ -110,7 +110,7 @@ class VQImageAutoregressiveAutoencoder(Module):
     def sample(
         self,
         num_samples = 64,
-        min_p = 0.5,
+        min_p = 0.25,
         temperature = 1.5
     ):
         self.eval()
@@ -245,7 +245,16 @@ for step in range(1, 100_000 + 1):
     optimizer.step()
     optimizer.zero_grad()    
 
-    print(f'{step}: {loss.item():.3f}\trecon: {recon_loss.item():.3f}\tce: {ce_loss.item():.3f}\tvq commit: {vq_commit_loss.item():.3f}\tar commit: {ar_commit_loss.item():.3f}')
+    loss_str = "\t".join([f"{loss_name}: {loss.item():.3f}"
+        for loss_name, loss in (
+            ('recon', recon_loss),
+            ('ce', ce_loss),
+            ('vq commit', vq_commit_loss),
+            ('ar commit', ar_commit_loss)
+        )
+    ])
+
+    print(f'{step}: {loss_str}')
 
     if divisible_by(step, 500):
         save_image(
