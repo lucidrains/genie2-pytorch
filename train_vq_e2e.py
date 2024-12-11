@@ -54,8 +54,8 @@ class VQImageAutoregressiveAutoencoder(Module):
         depth = 3,
         dim_head = 16,
         heads = 4,
+        recon_from_pred_codes = True, # whether to reconstruct from the predicted codes or from the quantized codes directly after vq
         recon_loss_weight = 1.,
-        ar_embed_loss_weight = 1.,
         vq_commit_loss_weight = 1.
     ):
         super().__init__()
@@ -95,8 +95,9 @@ class VQImageAutoregressiveAutoencoder(Module):
             Lambda(lambda x: (x + 1) * 0.5),
         )
 
+        self.recon_from_pred_codes = recon_from_pred_codes
         self.recon_loss_weight = recon_loss_weight
-        self.ar_embed_loss_weight = ar_embed_loss_weight
+
         self.vq_commit_loss_weight = vq_commit_loss_weight
 
     @property
@@ -147,31 +148,35 @@ class VQImageAutoregressiveAutoencoder(Module):
 
         quantized, codes, commit_loss = self.vq(encoded)
 
-        # recon loss, learning autoencoder end to end
-
-        recon_image = self.decode(quantized)
-
-        recon_loss = F.mse_loss(
-            recon_image,
-            image
-        )
-
         # setup autoregressive, patches as tokens scanned from each row left to right
 
         start_tokens = repeat(self.start_token, '... -> b 1 ...', b = encoded.shape[0])
 
         tokens = torch.cat((start_tokens, quantized[:, :-1]), dim = -2)
 
-        embed = self.decoder(tokens)
+        pred_codes = self.decoder(tokens)
 
-        codebook = self.vq.codebook
-
-        logits = -torch.cdist(embed, codebook)
+        logits = -torch.cdist(pred_codes, self.vq.codebook)
 
         ce_loss = F.cross_entropy(
             rearrange(logits, 'b n l -> b l n'),
             codes
         )
+
+        # recon loss, learning autoencoder end to end
+
+        if self.recon_from_pred_codes:
+            rotated_pred_codes = rotate_to(pred_codes, self.vq.get_codes_from_indices(codes))
+            recon_image = self.decode(rotated_pred_codes)
+        else:
+            recon_image = self.decode(quantized)
+
+        recon_loss = F.mse_loss(
+            recon_image,
+            image
+        )
+
+        # total loss and breakdown
 
         total_loss = (
             ce_loss +
