@@ -510,7 +510,9 @@ class Genie2(Module):
 
         # handle maybe variable lengthed videos
 
-        if exists(video_time_len):
+        is_variable_len_video = exists(video_time_len)
+
+        if is_variable_len_video:
             assert ((video_time_len > 0) & (video_time_len <= time_seq_len)).all(), '`video_time_len` has invalid time lengths'
             time_mask = lens_to_mask(video_time_len, time_seq_len)
 
@@ -580,7 +582,7 @@ class Genie2(Module):
             rotary_pos, xpos_scale = time_rotary_pos
             time_rotary_pos = (rotary_pos[:, :-1], xpos_scale)
 
-            if exists(video_time_len):
+            if is_variable_len_video:
                 time_mask = repeat(time_mask, 'b n -> b (n r)', r = spatial_repeat_factor)
                 latent_indices = latent_indices.masked_fill(time_mask, -1)
 
@@ -677,6 +679,14 @@ class Genie2(Module):
                 action_labels = F.pad(action_labels, (0, 1), value = -1)
                 num_actions_per_time = (action_labels >= 0).sum(dim = -1, keepdim = True)
                 action_labels = action_labels.scatter(-1, num_actions_per_time, self.action_eos_id)
+
+                # handle variable lengthed videos
+
+                if is_variable_len_video:
+                    action_labels = action_labels.masked_fill(time_mask[:, :-1], -1)
+
+                # fold time into batch
+
                 action_labels = rearrange(action_labels, 'b t a -> (b t) a')
 
             # cross entropy loss for predicted action on the action transformer head (hierarchical transformer)
