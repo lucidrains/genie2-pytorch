@@ -72,6 +72,10 @@ def identity(t):
 def l2norm(t, dim = -1):
     return F.normalize(t, dim = dim, p = 2)
 
+def lens_to_mask(lens, total_len):
+    seq = torch.arange(total_len, device = lens.device)
+    return einx.less('n, b -> b n', seq, lens)
+
 def pack_one(t, pattern):
     packed, ps = pack([t], pattern)
 
@@ -489,6 +493,7 @@ class Genie2(Module):
         state: Float['b c t h w'] | None = None,
         state_codes: Int['b n'] = None,
         time_seq_len: int | None = None,
+        video_time_len: Int['b'] | None = None,
         actions: Int['b t'] | Int['b t a'] = None,
         sort_actions = True, # take care of sorting the actions, with any value below 0 as padding
         return_loss = True
@@ -502,6 +507,12 @@ class Genie2(Module):
             time_seq_len = state.shape[2]
 
         time_seq = torch.arange(time_seq_len, device = device)
+
+        # handle maybe variable lengthed videos
+
+        if exists(video_time_len):
+            assert ((video_time_len > 0) & (video_time_len <= time_seq_len)).all(), '`video_time_len` has invalid time lengths'
+            time_mask = lens_to_mask(video_time_len, time_seq_len)
 
         # handle actions, but allow for state dynamics model to be trained independently
 
@@ -568,6 +579,10 @@ class Genie2(Module):
 
             rotary_pos, xpos_scale = time_rotary_pos
             time_rotary_pos = (rotary_pos[:, :-1], xpos_scale)
+
+            if exists(video_time_len):
+                time_mask = repeat(time_mask, 'b n -> b (n r)', r = spatial_repeat_factor)
+                latent_indices = latent_indices.masked_fill(time_mask, -1)
 
             labels = latent_indices[:, 1:]
 
