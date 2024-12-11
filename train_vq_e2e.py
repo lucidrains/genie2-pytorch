@@ -56,7 +56,8 @@ class VQImageAutoregressiveAutoencoder(Module):
         heads = 4,
         recon_from_pred_codes = True, # whether to reconstruct from the predicted codes or from the quantized codes directly after vq
         recon_loss_weight = 1.,
-        vq_commit_loss_weight = 1.
+        vq_commit_loss_weight = 1.,
+        ar_commit_loss_weight = 1.
     ):
         super().__init__()
         assert divisible_by(image_size, patch_size)
@@ -99,6 +100,7 @@ class VQImageAutoregressiveAutoencoder(Module):
         self.recon_loss_weight = recon_loss_weight
 
         self.vq_commit_loss_weight = vq_commit_loss_weight
+        self.ar_commit_loss_weight = ar_commit_loss_weight
 
     @property
     def device(self):
@@ -176,15 +178,20 @@ class VQImageAutoregressiveAutoencoder(Module):
             image
         )
 
+        # ar commit loss
+
+        ar_commit_loss = F.mse_loss(pred_codes, quantized)
+
         # total loss and breakdown
 
         total_loss = (
             ce_loss +
             recon_loss * self.recon_loss_weight +
-            commit_loss * self.vq_commit_loss_weight
+            commit_loss * self.vq_commit_loss_weight +
+            ar_commit_loss * self.ar_commit_loss_weight
         )
 
-        return total_loss, (image, recon_image), (ce_loss, recon_loss, commit_loss)
+        return total_loss, (image, recon_image), (ce_loss, recon_loss, commit_loss, ar_commit_loss)
 
 # model
 
@@ -230,7 +237,7 @@ optimizer = Adam(model.parameters(), lr = 3e-4)
 
 for step in range(1, 100_000 + 1):
 
-    loss, (image, recon_image), (ce_loss, recon_loss, vq_commit_loss) = model(next(iter_dl))
+    loss, (image, recon_image), (ce_loss, recon_loss, vq_commit_loss, ar_commit_loss) = model(next(iter_dl))
     loss.backward()
 
     torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -238,7 +245,7 @@ for step in range(1, 100_000 + 1):
     optimizer.step()
     optimizer.zero_grad()    
 
-    print(f'{step}: {loss.item():.3f}\trecon: {recon_loss.item():.3f}\tce: {ce_loss.item():.3f}\tvq commit: {vq_commit_loss.item():.3f}')
+    print(f'{step}: {loss.item():.3f}\trecon: {recon_loss.item():.3f}\tce: {ce_loss.item():.3f}\tvq commit: {vq_commit_loss.item():.3f}\tar commit: {ar_commit_loss.item():.3f}')
 
     if divisible_by(step, 500):
         save_image(
