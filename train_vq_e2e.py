@@ -54,7 +54,7 @@ class VQImageAutoregressiveAutoencoder(Module):
         depth = 3,
         dim_head = 16,
         heads = 4,
-        recon_from_pred_codes = True, # whether to reconstruct from the predicted codes or from the quantized codes directly after vq
+        recon_from_pred_codes_weight = 1., # whether to reconstruct from the predicted codes or from the quantized codes directly after vq. 1. means from entirely from predicted code and 0. means entirely right after VQ, so none of the transformer network receives any of the reconstruction gradients
         recon_loss_weight = 1.,
         vq_commit_loss_weight = 1.,
         ar_commit_loss_weight = 1.
@@ -96,7 +96,7 @@ class VQImageAutoregressiveAutoencoder(Module):
             Lambda(lambda x: (x + 1) * 0.5),
         )
 
-        self.recon_from_pred_codes = recon_from_pred_codes
+        self.recon_from_pred_codes_weight = recon_from_pred_codes_weight
         self.recon_loss_weight = recon_loss_weight
 
         self.vq_commit_loss_weight = vq_commit_loss_weight
@@ -167,11 +167,24 @@ class VQImageAutoregressiveAutoencoder(Module):
 
         # recon loss, learning autoencoder end to end
 
-        if self.recon_from_pred_codes:
+        recon_image_from_pred_codes = 0.
+        recon_image_from_vq = 0.
+
+        if self.recon_from_pred_codes_weight > 0.:
             rotated_pred_codes = rotate_to(pred_codes, self.vq.get_codes_from_indices(codes))
-            recon_image = self.decode(rotated_pred_codes)
-        else:
-            recon_image = self.decode(quantized)
+            recon_image_from_pred_codes = self.decode(rotated_pred_codes)
+
+        if self.recon_from_pred_codes_weight < 1.:
+            recon_image_from_vq = self.decode(quantized)
+
+        # weighted combine
+
+        recon_image = (
+            recon_image_from_pred_codes * self.recon_from_pred_codes_weight +
+            recon_image_from_vq * (1. - self.recon_from_pred_codes_weight)
+        )
+
+        # mse loss
 
         recon_loss = F.mse_loss(
             recon_image,
@@ -201,7 +214,8 @@ model = VQImageAutoregressiveAutoencoder(
     codebook_size = 64,
     decay = 0.95,
     image_size = 28,
-    patch_size = 4
+    patch_size = 4,
+    recon_from_pred_codes_weight = 0.5
 )
 
 # data related + optimizer
