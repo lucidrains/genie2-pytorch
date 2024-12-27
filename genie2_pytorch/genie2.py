@@ -168,6 +168,7 @@ class Genie2(Module):
             learned_value_residual_mix = True,
             ff_glu = True,
             use_rmsnorm = True,
+            num_residual_streams = 4
         ),
         action_transformer_kwargs: dict = dict(
             add_value_residual = True,
