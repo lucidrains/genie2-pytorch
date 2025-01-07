@@ -149,6 +149,24 @@ class MetaTokenWrapper(Module):
 
         return out
 
+# causal convolution for letting (r)vq be temporally aware
+
+class CausalConv3d(Module):
+    def __init__(
+        self,
+        dim,
+        dim_out,
+        kernel_size,
+        bias = False
+    ):
+        super().__init__()
+        self.padding = (0, 0, 0, 0, kernel_size - 1, 0)
+        self.conv = nn.Conv3d(dim, dim_out, (kernel_size, 1, 1), bias = bias)
+
+    def forward(self, x):
+        x = F.pad(x, self.padding)
+        return self.conv(x)
+
 # main class
 
 class Genie2(Module):
@@ -188,6 +206,8 @@ class Genie2(Module):
         allow_multiple_actions = False,
         max_num_actions = 10,
         action_autoregressive_loss_weight = 0.1,
+        add_temporal_convs = False,
+        temporal_conv_kernel_size = 5,
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
     ):
         super().__init__()
@@ -210,10 +230,25 @@ class Genie2(Module):
             dim = attn_dim_head // 2
         )
 
+        # quantize latents
+
+        # if working with image encoder / decoder, can do some temporal encoding with a 3d convolution before quantization
+
+        self.pre_vq_transform = nn.Identity()
+        self.post_vq_transform = nn.Identity()
+
+        self.need_recon_loss = False
+
+        if add_temporal_convs:
+            assert not is_video_enc_dec, 'if using a video encoder / decoder, adding temporal convolutions is not necessary'
+            self.pre_vq_transform = CausalConv3d(dim_latent, dim_latent, temporal_conv_kernel_size)
+            self.post_vq_transform = CausalConv3d(dim_latent, dim_latent, temporal_conv_kernel_size)
+            self.need_recon_loss = True
+
         self.vq = VectorQuantize(
             dim = dim_latent,
             codebook_size = vq_codebook_size,
-            rotation_trick = False,
+            rotation_trick = self.need_recon_loss,
             **vq_kwargs
         )
 
@@ -434,6 +469,10 @@ class Genie2(Module):
             latents = unpack_time(latents, '* c h w')
             latents = rearrange(latents, 'b t c h w -> b c t h w')
 
+        # handle maybe temporal convolutions
+
+        latents = self.pre_vq_transform(latents)
+
         # handle channel first, if encoder does not
 
         if self.latent_channel_first:
@@ -447,7 +486,9 @@ class Genie2(Module):
 
         # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
 
-        return self.vq(latents)
+        quantized = self.vq(latents)
+
+        return quantized
 
     @property
     def device(self):
