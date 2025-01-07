@@ -249,7 +249,7 @@ class Genie2(Module):
         self.vq = VectorQuantize(
             dim = dim_latent,
             codebook_size = vq_codebook_size,
-            rotation_trick = self.need_recon_loss,
+            rotation_trick = True,
             **vq_kwargs
         )
 
