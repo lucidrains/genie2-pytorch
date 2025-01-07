@@ -208,6 +208,7 @@ class Genie2(Module):
         action_autoregressive_loss_weight = 0.1,
         add_temporal_convs = False,
         temporal_conv_kernel_size = 5,
+        temporal_autoencoder_recon_loss_weight = 0.2,
         is_video_enc_dec = False # by default will assume image encoder / decoder, but in the future, video diffusion models with temporal compression will likely perform even better, imo
     ):
         super().__init__()
@@ -253,6 +254,7 @@ class Genie2(Module):
         )
 
         self.vq_commit_loss_weight = vq_commit_loss_weight
+        self.vq_recon_loss_weight = temporal_autoencoder_recon_loss_weight
 
         # wrapper for adding meta tokens
 
@@ -450,7 +452,8 @@ class Genie2(Module):
 
     def encode_state(
         self,
-        state: Float['b c t h w']
+        state: Float['b c t h w'],
+        return_recon_loss = False
     ):
 
         # only need to fold time into batch if not a video enc/dec (classic image enc/dec of today)
@@ -469,6 +472,10 @@ class Genie2(Module):
             latents = unpack_time(latents, '* c h w')
             latents = rearrange(latents, 'b t c h w -> b c t h w')
 
+        # store latents for maybe recon loss
+
+        orig_latents = latents
+
         # handle maybe temporal convolutions
 
         latents = self.pre_vq_transform(latents)
@@ -486,9 +493,26 @@ class Genie2(Module):
 
         # discrete quantize - offer continuous later, either using GIVT https://arxiv.org/abs/2312.02116v2 or Kaiming He's https://arxiv.org/abs/2406.11838
 
-        quantized = self.vq(latents)
+        quantized_out = self.vq(latents)
 
-        return quantized
+        if not return_recon_loss:
+            return quantized_out
+
+        if not self.need_recon_loss:
+            return quantized_out, self.zero
+
+        quantized_latents, *_ = quantized_out
+
+        quantized_latents = unpack_time_space_dims(quantized_latents)
+
+        if self.latent_channel_first:
+            quantized_latents = rearrange(quantized_latents, 'b ... d -> b d ...')
+
+        recon_latents = self.post_vq_transform(quantized_latents)
+
+        recon_loss = F.mse_loss(orig_latents, recon_latents)
+
+        return quantized_out, recon_loss
 
     @property
     def device(self):
@@ -593,7 +617,7 @@ class Genie2(Module):
         # encode the state, if state codes are given during sampling, fetch the codes from the vq codebook
 
         if exists(state):
-            quantized_latents, latent_indices, commit_loss = self.encode_state(state)
+            (quantized_latents, latent_indices, commit_loss), recon_loss = self.encode_state(state, return_recon_loss = True)
 
         elif exists(state_codes):
             latent_indices = state_codes
@@ -741,7 +765,8 @@ class Genie2(Module):
 
             total_loss = (
                 total_loss +
-                action_loss * self.action_autoregressive_loss_weight
+                action_loss * self.action_autoregressive_loss_weight +
+                recon_loss * self.vq_recon_loss_weight
             )
 
         return total_loss, (state_autoregressive_loss, commit_loss, action_loss)
