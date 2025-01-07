@@ -429,6 +429,12 @@ class Genie2(Module):
         if self.latent_channel_first:
             tokens = rearrange(tokens, 'b ... d -> b d ...')
 
+        # maybe post vq temporal conv
+
+        tokens = self.post_vq_transform(tokens)
+
+        # maybe fold time into batch for certain decoders
+
         need_fold_time_into_batch = not self.is_video_enc_dec
 
         if need_fold_time_into_batch:
